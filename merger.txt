@@ -1,3 +1,48 @@
+module top(
+	input 	wire CLK,
+	input 	wire[3:0] KEY_SW,
+	output 	wire[3:0] LED,
+	output 	wire[7:0] SEG,
+	output 	wire[3:0] DIG,
+	input 	wire I2C_GPIO,
+	inout 	wire I2C_SCL,
+	inout 	wire I2C_SDA
+);
+
+wire[15:0] number;
+///assign number = 10'd9;
+
+//assign SEG = ~'b11100000;
+//assign DIG = 4'b1100;
+reg[31:0] number_counter;
+wire rst = ~KEY_SW[3];
+wire clk = CLK;
+
+always @(posedge clk or posedge rst) begin
+	if (rst)
+		number_counter <= 0;
+	else
+		number_counter <= number_counter + 1;
+end
+
+
+seven_segment_display(.clk(CLK),
+							 .rst(rst),
+							 .number(number),
+							 .dots(4'b0),
+							 .abcdefgh(SEG),
+							 .digit(DIG));
+							 
+netop(.clk(CLK),
+		.rst_btn(rst),
+		.start_btn(~KEY_SW[2]),
+		.i2c_scl(I2C_SCL),
+		.i2c_sda(I2C_SDA),
+		.distance_mm(number),
+		.busy(LED[0]),
+		.done(LED[1]),
+		.error(LED[2]));
+		
 // -----------------------------------------------------------------------------
 // Связь tof_ctrl <-> i2c_master
 // -----------------------------------------------------------------------------
@@ -110,3 +155,5 @@ tof_ctrl #(
     .txn_rsp_nack(tof_txn_rsp_nack),
     .txn_rsp_rd_data(tof_txn_rsp_rd_data)
 );
+
+endmodule
