@@ -10,7 +10,7 @@ module i2c_master (
 
     output reg busy,
     output reg done,
-    output reg ack_error,
+    output reg ack_error, // Если датчик не ответил, нет устройства, не верный адрес, ошибка тайминга
 
     inout wire sda,
     output reg scl
@@ -46,7 +46,7 @@ module i2c_master (
     localparam ADDR = 2;
     localparam ACK_AFTER_ADDRES = 3;
     localparam DATA = 4;
-    localparam ACK_AFTER_DATA  = 5;
+    localparam ACK_AFTER_DATA = 5;
     localparam READ = 6;
     localparam NACK = 7;
     localparam STOP = 8;
