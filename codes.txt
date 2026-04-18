@@ -1,0 +1,65 @@
+i2c_master #(
+    .CLK_HZ(CLK_HZ),
+    .I2C_HZ(I2C_HZ)
+) u_i2c_master (
+    .clk(clk),
+    .rst_n(rst_n),
+    .start(txn_core_start),
+    .is_read(txn_core_is_read),
+    .dev_addr(txn_core_dev_addr),
+    .reg_addr(txn_core_reg_addr),
+    .reg_addr_16b(txn_core_reg_addr_16b),
+    .wr_data(txn_core_wr_data),
+    .rd_len(txn_core_rd_len),
+    .rd_data(txn_core_rd_data),
+    .busy(txn_core_busy),
+    .done(txn_core_done),
+    .error(txn_core_error),
+    .nack(txn_core_nack),
+    .scl_drive_low(scl_drive_low),
+    .sda_drive_low(sda_drive_low),
+    .scl_in(i2c_scl),
+    .sda_in(i2c_sda)
+);
+
+tof_ctrl #(
+    .SENSOR_KIND(TOF_SENSOR_KIND),
+    .CLK_HZ(CLK_HZ)
+) u_tof_ctrl (
+    .clk(clk),
+    .rst_n(rst_n),
+    .init_start(tof_init_start),
+    .sample_start(tof_sample_start),
+    .distance_mm(tof_distance_mm),
+    .distance_valid(tof_distance_valid),
+    .busy(tof_busy),
+    .done(tof_done),
+    .error(tof_error),
+    .nack(tof_nack),
+    .txn_req_valid(tof_txn_req_valid),
+    .txn_req_ready(tof_txn_req_ready),
+    .txn_req_is_read(tof_txn_req_is_read),
+    .txn_req_dev_addr(tof_txn_req_dev_addr),
+    .txn_req_reg_addr(tof_txn_req_reg_addr),
+    .txn_req_reg_addr_16b(tof_txn_req_reg_addr_16b),
+    .txn_req_wr_data(tof_txn_req_wr_data),
+    .txn_req_rd_len(tof_txn_req_rd_len),
+    .txn_rsp_done(tof_txn_rsp_done),
+    .txn_rsp_error(tof_txn_rsp_error),
+    .txn_rsp_nack(tof_txn_rsp_nack),
+    .txn_rsp_rd_data(tof_txn_rsp_rd_data)
+);
+
+
+
+//==========================================================================
+
+
+
+
+set_location_assignment PIN_77 -to i2c_scl
+set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to i2c_scl
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to i2c_scl
+set_location_assignment PIN_76 -to i2c_sda
+set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to i2c_sda
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to i2c_sda
