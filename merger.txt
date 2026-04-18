@@ -1,159 +1,182 @@
-module top(
-	input 	wire CLK,
-	input 	wire[3:0] KEY_SW,
-	output 	wire[3:0] LED,
-	output 	wire[7:0] SEG,
-	output 	wire[3:0] DIG,
-	input 	wire I2C_GPIO,
-	inout 	wire I2C_SCL,
-	inout 	wire I2C_SDA
+module top (
+    input  wire       CLK,
+    input  wire [3:0] KEY_SW,
+    output wire [3:0] LED,
+    output wire [7:0] SEG,
+    output wire [3:0] DIG,
+    input  wire       I2C_GPIO,
+    inout  wire       I2C_SCL,
+    inout  wire       I2C_SDA
 );
 
-wire[15:0] number;
-///assign number = 10'd9;
+    //--------------------------------------------------------------------------
+    // Параметры
+    //--------------------------------------------------------------------------
+    localparam int CLK_HZ          = 50_000_000;
+    localparam int I2C_HZ          = 100_000;
+    localparam int TOF_SENSOR_KIND = 0;
 
-//assign SEG = ~'b11100000;
-//assign DIG = 4'b1100;
-reg[31:0] number_counter;
-wire rst = ~KEY_SW[3];
-wire clk = CLK;
+    //--------------------------------------------------------------------------
+    // Reset / Clock
+    //--------------------------------------------------------------------------
+    wire clk   = CLK;
+    wire rst   = ~KEY_SW[3];
+    wire rst_n = ~rst;
 
-always @(posedge clk or posedge rst) begin
-	if (rst)
-		number_counter <= 0;
-	else
-		number_counter <= number_counter + 1;
-end
+    //--------------------------------------------------------------------------
+    // Управление кнопками
+    //--------------------------------------------------------------------------
+    wire tof_sample_start = ~KEY_SW[2];
+    wire tof_init_start   = ~KEY_SW[1];
 
+    //--------------------------------------------------------------------------
+    // Данные TOF
+    //--------------------------------------------------------------------------
+    wire [15:0] number;
+    wire        tof_distance_valid;
+    wire        tof_busy;
+    wire        tof_done;
+    wire        tof_error;
+    wire        tof_nack;
 
-seven_segment_display(.clk(CLK),
-							 .rst(rst),
-							 .number(number),
-							 .dots(4'b0),
-							 .abcdefgh(SEG),
-							 .digit(DIG));
-							 
-netop(.clk(CLK),
-		.rst_btn(rst),
-		.start_btn(~KEY_SW[2]),
-		.i2c_scl(I2C_SCL),
-		.i2c_sda(I2C_SDA),
-		.distance_mm(number),
-		.busy(LED[0]),
-		.done(LED[1]),
-		.error(LED[2]));
-		
-// -----------------------------------------------------------------------------
-// Связь tof_ctrl <-> i2c_master
-// -----------------------------------------------------------------------------
+    //--------------------------------------------------------------------------
+    // LED статус
+    //--------------------------------------------------------------------------
+    assign LED[0] = tof_busy;
+    assign LED[1] = tof_done;
+    assign LED[2] = tof_error;
+    assign LED[3] = tof_distance_valid;
 
-logic        txn_core_start;
-logic        txn_core_is_read;
-logic [6:0]  txn_core_dev_addr;
-logic [15:0] txn_core_reg_addr;
-logic        txn_core_reg_addr_16b;
-logic [7:0]  txn_core_wr_data;
-logic [1:0]  txn_core_rd_len;
-logic [31:0] txn_core_rd_data;
-logic        txn_core_busy;
-logic        txn_core_done;
-logic        txn_core_error;
-logic        txn_core_nack;
+    //--------------------------------------------------------------------------
+    // 7-сегментный индикатор
+    //--------------------------------------------------------------------------
+    seven_segment_display u_disp (
+        .clk      (clk),
+        .rst      (rst),
+        .number   (number),
+        .dots     (4'b0000),
+        .abcdefgh (SEG),
+        .digit    (DIG)
+    );
 
-// handshake с tof_ctrl
-logic        tof_txn_req_valid;
-logic        tof_txn_req_ready;
-logic        tof_txn_req_is_read;
-logic [6:0]  tof_txn_req_dev_addr;
-logic [15:0] tof_txn_req_reg_addr;
-logic        tof_txn_req_reg_addr_16b;
-logic [7:0]  tof_txn_req_wr_data;
-logic [1:0]  tof_txn_req_rd_len;
+    //--------------------------------------------------------------------------
+    // I2C open-drain
+    //--------------------------------------------------------------------------
+    wire scl_drive_low;
+    wire sda_drive_low;
 
-logic        tof_txn_rsp_done;
-logic        tof_txn_rsp_error;
-logic        tof_txn_rsp_nack;
-logic [31:0] tof_txn_rsp_rd_data;
+    assign I2C_SCL = scl_drive_low ? 1'b0 : 1'bz;
+    assign I2C_SDA = sda_drive_low ? 1'b0 : 1'bz;
 
-// master управляет линиями I2C через open-drain
-logic scl_drive_low, sda_drive_low;
+    //--------------------------------------------------------------------------
+    // Связь tof_ctrl <-> i2c_master
+    //--------------------------------------------------------------------------
+    wire        txn_core_start;
+    wire        txn_core_is_read;
+    wire [6:0]  txn_core_dev_addr;
+    wire [15:0] txn_core_reg_addr;
+    wire        txn_core_reg_addr_16b;
+    wire [7:0]  txn_core_wr_data;
+    wire [1:0]  txn_core_rd_len;
+    wire [31:0] txn_core_rd_data;
+    wire        txn_core_busy;
+    wire        txn_core_done;
+    wire        txn_core_error;
+    wire        txn_core_nack;
 
-assign i2c_scl = scl_drive_low ? 1'b0 : 1'bz;
-assign i2c_sda = sda_drive_low ? 1'b0 : 1'bz;
+    // handshake
+    wire        tof_txn_req_valid;
+    wire        tof_txn_req_ready;
+    wire        tof_txn_req_is_read;
+    wire [6:0]  tof_txn_req_dev_addr;
+    wire [15:0] tof_txn_req_reg_addr;
+    wire        tof_txn_req_reg_addr_16b;
+    wire [7:0]  tof_txn_req_wr_data;
+    wire [1:0]  tof_txn_req_rd_len;
 
-// tof_ctrl может выдать новый запрос, только когда master свободен
-assign tof_txn_req_ready = ~txn_core_busy;
+    wire        tof_txn_rsp_done;
+    wire        tof_txn_rsp_error;
+    wire        tof_txn_rsp_nack;
+    wire [31:0] tof_txn_rsp_rd_data;
 
-// стартуем master на 1 такт, когда запрос valid и master ready
-assign txn_core_start       = tof_txn_req_valid & tof_txn_req_ready;
+    // master готов принять новый запрос
+    assign tof_txn_req_ready = ~txn_core_busy;
 
-// пробрасываем параметры транзакции
-assign txn_core_is_read     = tof_txn_req_is_read;
-assign txn_core_dev_addr    = tof_txn_req_dev_addr;
-assign txn_core_reg_addr    = tof_txn_req_reg_addr;
-assign txn_core_reg_addr_16b= tof_txn_req_reg_addr_16b;
-assign txn_core_wr_data     = tof_txn_req_wr_data;
-assign txn_core_rd_len      = tof_txn_req_rd_len;
+    // старт транзакции
+    assign txn_core_start = tof_txn_req_valid & tof_txn_req_ready;
 
-// возвращаем ответ обратно в tof_ctrl
-assign tof_txn_rsp_done     = txn_core_done;
-assign tof_txn_rsp_error    = txn_core_error;
-assign tof_txn_rsp_nack     = txn_core_nack;
-assign tof_txn_rsp_rd_data  = txn_core_rd_data;
+    // параметры
+    assign txn_core_is_read      = tof_txn_req_is_read;
+    assign txn_core_dev_addr     = tof_txn_req_dev_addr;
+    assign txn_core_reg_addr     = tof_txn_req_reg_addr;
+    assign txn_core_reg_addr_16b = tof_txn_req_reg_addr_16b;
+    assign txn_core_wr_data      = tof_txn_req_wr_data;
+    assign txn_core_rd_len       = tof_txn_req_rd_len;
 
+    // ответы
+    assign tof_txn_rsp_done    = txn_core_done;
+    assign tof_txn_rsp_error   = txn_core_error;
+    assign tof_txn_rsp_nack    = txn_core_nack;
+    assign tof_txn_rsp_rd_data = txn_core_rd_data;
 
-i2c_master #(
-    .CLK_HZ(CLK_HZ),
-    .I2C_HZ(I2C_HZ)
-) u_i2c_master (
-    .clk(clk),
-    .rst_n(rst_n),
-    .start(txn_core_start),
-    .is_read(txn_core_is_read),
-    .dev_addr(txn_core_dev_addr),
-    .reg_addr(txn_core_reg_addr),
-    .reg_addr_16b(txn_core_reg_addr_16b),
-    .wr_data(txn_core_wr_data),
-    .rd_len(txn_core_rd_len),
-    .rd_data(txn_core_rd_data),
-    .busy(txn_core_busy),
-    .done(txn_core_done),
-    .error(txn_core_error),
-    .nack(txn_core_nack),
-    .scl_drive_low(scl_drive_low),
-    .sda_drive_low(sda_drive_low),
-    .scl_in(i2c_scl),
-    .sda_in(i2c_sda)
-);
+    //--------------------------------------------------------------------------
+    // I2C master
+    //--------------------------------------------------------------------------
+    i2c_master #(
+        .CLK_HZ (CLK_HZ),
+        .I2C_HZ (I2C_HZ)
+    ) u_i2c_master (
+        .clk           (clk),
+        .rst_n         (rst_n),
+        .start         (txn_core_start),
+        .is_read       (txn_core_is_read),
+        .dev_addr      (txn_core_dev_addr),
+        .reg_addr      (txn_core_reg_addr),
+        .reg_addr_16b  (txn_core_reg_addr_16b),
+        .wr_data       (txn_core_wr_data),
+        .rd_len        (txn_core_rd_len),
+        .rd_data       (txn_core_rd_data),
+        .busy          (txn_core_busy),
+        .done          (txn_core_done),
+        .error         (txn_core_error),
+        .nack          (txn_core_nack),
+        .scl_drive_low (scl_drive_low),
+        .sda_drive_low (sda_drive_low),
+        .scl_in        (I2C_SCL),
+        .sda_in        (I2C_SDA)
+    );
 
-tof_ctrl #(
-    .SENSOR_KIND(TOF_SENSOR_KIND),
-    .CLK_HZ(CLK_HZ)
-) u_tof_ctrl (
-    .clk(clk),
-    .rst_n(rst_n),
-    .init_start(tof_init_start),
-    .sample_start(tof_sample_start),
-    .distance_mm(tof_distance_mm),
-    .distance_valid(tof_distance_valid),
-    .busy(tof_busy),
-    .done(tof_done),
-    .error(tof_error),
-    .nack(tof_nack),
+    //--------------------------------------------------------------------------
+    // TOF controller
+    //--------------------------------------------------------------------------
+    tof_ctrl #(
+        .SENSOR_KIND (TOF_SENSOR_KIND),
+        .CLK_HZ      (CLK_HZ)
+    ) u_tof_ctrl (
+        .clk                  (clk),
+        .rst_n                (rst_n),
+        .init_start           (tof_init_start),
+        .sample_start         (tof_sample_start),
+        .distance_mm          (number),
+        .distance_valid       (tof_distance_valid),
+        .busy                 (tof_busy),
+        .done                 (tof_done),
+        .error                (tof_error),
+        .nack                 (tof_nack),
 
-    .txn_req_valid(tof_txn_req_valid),
-    .txn_req_ready(tof_txn_req_ready),
-    .txn_req_is_read(tof_txn_req_is_read),
-    .txn_req_dev_addr(tof_txn_req_dev_addr),
-    .txn_req_reg_addr(tof_txn_req_reg_addr),
-    .txn_req_reg_addr_16b(tof_txn_req_reg_addr_16b),
-    .txn_req_wr_data(tof_txn_req_wr_data),
-    .txn_req_rd_len(tof_txn_req_rd_len),
+        .txn_req_valid        (tof_txn_req_valid),
+        .txn_req_ready        (tof_txn_req_ready),
+        .txn_req_is_read      (tof_txn_req_is_read),
+        .txn_req_dev_addr     (tof_txn_req_dev_addr),
+        .txn_req_reg_addr     (tof_txn_req_reg_addr),
+        .txn_req_reg_addr_16b (tof_txn_req_reg_addr_16b),
+        .txn_req_wr_data      (tof_txn_req_wr_data),
+        .txn_req_rd_len       (tof_txn_req_rd_len),
 
-    .txn_rsp_done(tof_txn_rsp_done),
-    .txn_rsp_error(tof_txn_rsp_error),
-    .txn_rsp_nack(tof_txn_rsp_nack),
-    .txn_rsp_rd_data(tof_txn_rsp_rd_data)
-);
+        .txn_rsp_done         (tof_txn_rsp_done),
+        .txn_rsp_error        (tof_txn_rsp_error),
+        .txn_rsp_nack         (tof_txn_rsp_nack),
+        .txn_rsp_rd_data      (tof_txn_rsp_rd_data)
+    );
 
 endmodule
