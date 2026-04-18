@@ -1,7 +1,11 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
-module top (
+module top #(
+    parameter int unsigned CLK_HZ          = 50_000_000,
+    parameter int unsigned I2C_HZ          = 100_000,
+    parameter int unsigned TOF_SENSOR_KIND = 0
+) (
     input  wire       CLK,
     input  wire [3:0] KEY_SW,
 
@@ -14,140 +18,231 @@ module top (
 );
 
     // ---------------------------------------------------------------------
-    // Reset
-    // KEY_SW[3] = reset button
-    // Assumption: released = 1, pressed = 0
-    // So rst_n = KEY_SW[3]
+    // Clock / Reset
+    // KEY_SW[3] = reset, active low on button press
     // ---------------------------------------------------------------------
-    logic rst_n;
-    assign rst_n = KEY_SW[3];
+    wire clk   = CLK;
+    wire rst_n = KEY_SW[3];
 
     // ---------------------------------------------------------------------
-    // Edge detect for buttons
-    // KEY_SW[0] -> init_start
-    // KEY_SW[1] -> sample_start
+    // Button edge detect
+    // KEY_SW[0] -> init
+    // KEY_SW[1] -> sample
     // ---------------------------------------------------------------------
-    logic [3:0] key_d;
-    logic init_start;
-    logic sample_start;
+    logic [3:0] key_sw_d;
 
-    always_ff @(posedge CLK or negedge rst_n) begin
+    logic tof_init_start;
+    logic tof_sample_start;
+
+    always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            key_d <= 4'b0000;
+            key_sw_d <= 4'b0000;
         end else begin
-            key_d <= KEY_SW;
+            key_sw_d <= KEY_SW;
         end
     end
 
-    assign init_start   =  KEY_SW[0] & ~key_d[0];
-    assign sample_start =  KEY_SW[1] & ~key_d[1];
+    assign tof_init_start   =  KEY_SW[0] & ~key_sw_d[0];
+    assign tof_sample_start =  KEY_SW[1] & ~key_sw_d[1];
 
     // ---------------------------------------------------------------------
-    // TOF controller interface
+    // TOF controller signals
     // ---------------------------------------------------------------------
-    logic [15:0] distance_mm;
-    logic        distance_valid;
-    logic        busy;
-    logic        done;
-    logic        error;
-    logic        nack;
+    logic [15:0] tof_distance_mm;
+    logic        tof_distance_valid;
+    logic        tof_busy;
+    logic        tof_done;
+    logic        tof_error;
+    logic        tof_nack;
 
-    logic        txn_req_valid;
-    logic        txn_req_ready;
-    logic        txn_req_is_read;
-    logic [6:0]  txn_req_dev_addr;
-    logic [15:0] txn_req_reg_addr;
-    logic        txn_req_reg_addr_16b;
-    logic [7:0]  txn_req_wr_data;
-    logic [1:0]  txn_req_rd_len;
+    logic        tof_txn_req_valid;
+    logic        tof_txn_req_ready;
+    logic        tof_txn_req_is_read;
+    logic [6:0]  tof_txn_req_dev_addr;
+    logic [15:0] tof_txn_req_reg_addr;
+    logic        tof_txn_req_reg_addr_16b;
+    logic [7:0]  tof_txn_req_wr_data;
+    logic [1:0]  tof_txn_req_rd_len;
 
-    logic        txn_rsp_done;
-    logic        txn_rsp_error;
-    logic        txn_rsp_nack;
-    logic [15:0] txn_rsp_rd_data;
+    logic        tof_txn_rsp_done;
+    logic        tof_txn_rsp_error;
+    logic        tof_txn_rsp_nack;
+    logic [15:0] tof_txn_rsp_rd_data;
 
     // ---------------------------------------------------------------------
-    // ToF wrapper
-    // SENSOR_KIND:
-    //   0 = AUTO
-    //   1 = VL53L0X
-    //   2 = VL53L1X
+    // I2C master core signals
     // ---------------------------------------------------------------------
-    tof_ctrl #(
-        .SENSOR_KIND(0),
-        .CLK_HZ(50_000_000)
-    ) u_tof_ctrl (
-        .clk                  (CLK),
-        .rst_n                (rst_n),
+    logic        txn_core_start;
+    logic        txn_core_is_read;
+    logic [6:0]  txn_core_dev_addr;
+    logic [15:0] txn_core_reg_addr;
+    logic        txn_core_reg_addr_16b;
+    logic [7:0]  txn_core_wr_data;
+    logic [1:0]  txn_core_rd_len;
+    logic [15:0] txn_core_rd_data;
+    logic        txn_core_busy;
+    logic        txn_core_done;
+    logic        txn_core_error;
+    logic        txn_core_nack;
 
-        .init_start           (init_start),
-        .sample_start         (sample_start),
+    logic        scl_drive_low;
+    logic        sda_drive_low;
 
-        .distance_mm          (distance_mm),
-        .distance_valid       (distance_valid),
-        .busy                 (busy),
-        .done                 (done),
-        .error                (error),
-        .nack                 (nack),
+    // ---------------------------------------------------------------------
+    // Open-drain I2C pins
+    // ---------------------------------------------------------------------
+    assign i2c_scl = scl_drive_low ? 1'b0 : 1'bz;
+    assign i2c_sda = sda_drive_low ? 1'b0 : 1'bz;
 
-        .txn_req_valid        (txn_req_valid),
-        .txn_req_ready        (txn_req_ready),
-        .txn_req_is_read      (txn_req_is_read),
-        .txn_req_dev_addr     (txn_req_dev_addr),
-        .txn_req_reg_addr     (txn_req_reg_addr),
-        .txn_req_reg_addr_16b (txn_req_reg_addr_16b),
-        .txn_req_wr_data      (txn_req_wr_data),
-        .txn_req_rd_len       (txn_req_rd_len),
+    // ---------------------------------------------------------------------
+    // Bridge: tof_ctrl handshake -> pulse start for i2c_master
+    //
+    // tof_ctrl gives:
+    //   txn_req_valid / txn_req_ready
+    //
+    // i2c_master expects:
+    //   start pulse + busy/done/error/nack
+    //
+    // So we:
+    //   1) wait for request from tof_ctrl
+    //   2) if i2c_master is idle, latch request and pulse txn_core_start
+    //   3) return ready to tof_ctrl for one cycle on accept
+    //   4) pass done/error/nack/rd_data back when transaction finishes
+    // ---------------------------------------------------------------------
+    typedef enum logic [0:0] {
+        BR_IDLE = 1'b0,
+        BR_WAIT = 1'b1
+    } bridge_state_t;
 
-        .txn_rsp_done         (txn_rsp_done),
-        .txn_rsp_error        (txn_rsp_error),
-        .txn_rsp_nack         (txn_rsp_nack),
-        .txn_rsp_rd_data      (txn_rsp_rd_data)
+    bridge_state_t bridge_state;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            bridge_state           <= BR_IDLE;
+
+            txn_core_start         <= 1'b0;
+            txn_core_is_read       <= 1'b0;
+            txn_core_dev_addr      <= 7'h00;
+            txn_core_reg_addr      <= 16'h0000;
+            txn_core_reg_addr_16b  <= 1'b0;
+            txn_core_wr_data       <= 8'h00;
+            txn_core_rd_len        <= 2'd0;
+
+            tof_txn_req_ready      <= 1'b0;
+            tof_txn_rsp_done       <= 1'b0;
+            tof_txn_rsp_error      <= 1'b0;
+            tof_txn_rsp_nack       <= 1'b0;
+            tof_txn_rsp_rd_data    <= 16'h0000;
+        end else begin
+            txn_core_start      <= 1'b0;
+            tof_txn_req_ready   <= 1'b0;
+            tof_txn_rsp_done    <= 1'b0;
+
+            case (bridge_state)
+                BR_IDLE: begin
+                    if (tof_txn_req_valid && !txn_core_busy) begin
+                        txn_core_is_read      <= tof_txn_req_is_read;
+                        txn_core_dev_addr     <= tof_txn_req_dev_addr;
+                        txn_core_reg_addr     <= tof_txn_req_reg_addr;
+                        txn_core_reg_addr_16b <= tof_txn_req_reg_addr_16b;
+                        txn_core_wr_data      <= tof_txn_req_wr_data;
+                        txn_core_rd_len       <= tof_txn_req_rd_len;
+
+                        txn_core_start        <= 1'b1;
+                        tof_txn_req_ready     <= 1'b1;
+
+                        bridge_state          <= BR_WAIT;
+                    end
+                end
+
+                BR_WAIT: begin
+                    if (txn_core_done) begin
+                        tof_txn_rsp_done    <= 1'b1;
+                        tof_txn_rsp_error   <= txn_core_error;
+                        tof_txn_rsp_nack    <= txn_core_nack;
+                        tof_txn_rsp_rd_data <= txn_core_rd_data;
+
+                        bridge_state        <= BR_IDLE;
+                    end
+                end
+
+                default: begin
+                    bridge_state <= BR_IDLE;
+                end
+            endcase
+        end
+    end
+
+    // ---------------------------------------------------------------------
+    // I2C master
+    // ---------------------------------------------------------------------
+    i2c_master #(
+        .CLK_HZ(CLK_HZ),
+        .I2C_HZ(I2C_HZ)
+    ) u_i2c_master (
+        .clk             (clk),
+        .rst_n           (rst_n),
+        .start           (txn_core_start),
+        .is_read         (txn_core_is_read),
+        .dev_addr        (txn_core_dev_addr),
+        .reg_addr        (txn_core_reg_addr),
+        .reg_addr_16b    (txn_core_reg_addr_16b),
+        .wr_data         (txn_core_wr_data),
+        .rd_len          (txn_core_rd_len),
+        .rd_data         (txn_core_rd_data),
+        .busy            (txn_core_busy),
+        .done            (txn_core_done),
+        .error           (txn_core_error),
+        .nack            (txn_core_nack),
+        .scl_drive_low   (scl_drive_low),
+        .sda_drive_low   (sda_drive_low),
+        .scl_in          (i2c_scl),
+        .sda_in          (i2c_sda)
     );
 
     // ---------------------------------------------------------------------
-    // I2C transaction master
-    // Replace this module name/ports if your real I2C master is different.
+    // TOF controller
     // ---------------------------------------------------------------------
-    i2c_reg_master #(
-        .CLK_HZ(50_000_000),
-        .I2C_HZ(100_000)
-    ) u_i2c_reg_master (
-        .clk              (CLK),
-        .rst_n            (rst_n),
-
-        .req_valid        (txn_req_valid),
-        .req_ready        (txn_req_ready),
-        .req_is_read      (txn_req_is_read),
-        .req_dev_addr     (txn_req_dev_addr),
-        .req_reg_addr     (txn_req_reg_addr),
-        .req_reg_addr_16b (txn_req_reg_addr_16b),
-        .req_wr_data      (txn_req_wr_data),
-        .req_rd_len       (txn_req_rd_len),
-
-        .rsp_done         (txn_rsp_done),
-        .rsp_error        (txn_rsp_error),
-        .rsp_nack         (txn_rsp_nack),
-        .rsp_rd_data      (txn_rsp_rd_data),
-
-        .i2c_scl          (i2c_scl),
-        .i2c_sda          (i2c_sda)
+    tof_ctrl #(
+        .SENSOR_KIND(TOF_SENSOR_KIND),
+        .CLK_HZ(CLK_HZ)
+    ) u_tof_ctrl (
+        .clk                 (clk),
+        .rst_n               (rst_n),
+        .init_start          (tof_init_start),
+        .sample_start        (tof_sample_start),
+        .distance_mm         (tof_distance_mm),
+        .distance_valid      (tof_distance_valid),
+        .busy                (tof_busy),
+        .done                (tof_done),
+        .error               (tof_error),
+        .nack                (tof_nack),
+        .txn_req_valid       (tof_txn_req_valid),
+        .txn_req_ready       (tof_txn_req_ready),
+        .txn_req_is_read     (tof_txn_req_is_read),
+        .txn_req_dev_addr    (tof_txn_req_dev_addr),
+        .txn_req_reg_addr    (tof_txn_req_reg_addr),
+        .txn_req_reg_addr_16b(tof_txn_req_reg_addr_16b),
+        .txn_req_wr_data     (tof_txn_req_wr_data),
+        .txn_req_rd_len      (tof_txn_req_rd_len),
+        .txn_rsp_done        (tof_txn_rsp_done),
+        .txn_rsp_error       (tof_txn_rsp_error),
+        .txn_rsp_nack        (tof_txn_rsp_nack),
+        .txn_rsp_rd_data     (tof_txn_rsp_rd_data)
     );
 
     // ---------------------------------------------------------------------
     // LEDs
     // ---------------------------------------------------------------------
     always_comb begin
-        LED[0] = busy;
-        LED[1] = done;
-        LED[2] = error | nack;
-        LED[3] = distance_valid;
+        LED[0] = tof_busy;
+        LED[1] = tof_done;
+        LED[2] = tof_error | tof_nack;
+        LED[3] = tof_distance_valid;
     end
 
     // ---------------------------------------------------------------------
-    // 7-segment display
-    // Shows distance_mm as HEX
-    //
+    // 7-segment display: show distance in HEX
     // Assumption:
     //   SEG active low
     //   DIG active low
@@ -159,15 +254,15 @@ module top (
     logic [7:0]  seg_raw;
     logic [3:0]  dig_raw;
 
-    always_ff @(posedge CLK or negedge rst_n) begin
+    always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             disp_value <= 16'h0000;
-        end else if (distance_valid) begin
-            disp_value <= distance_mm;
+        end else if (tof_distance_valid) begin
+            disp_value <= tof_distance_mm;
         end
     end
 
-    always_ff @(posedge CLK or negedge rst_n) begin
+    always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             scan_div <= 16'd0;
             scan_sel <= 2'd0;
