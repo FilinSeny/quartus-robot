@@ -1,4 +1,4 @@
-module top (
+module netop (
 	input wire clk,
 	input wire rst_btn,
 	input wire start_btn,
@@ -27,8 +27,7 @@ module top (
 	end
 
 	vl53l0x_controller #(
-		.MAX_BYTES(16),
-		.GPIO1_ACTIVE_LEVEL(1'b1)
+		.MAX_BYTES(16)
 	) vl53 (
 		.clk(clk),
 		.rst(rst),
