@@ -1,0 +1,21 @@
+Error (12002): Port "i2c_scl" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "i2c_sda" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "req_dev_addr" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "req_is_read" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "req_rd_len" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "req_ready" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "req_reg_addr" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "req_reg_addr_16b" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "req_valid" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "req_wr_data" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "rsp_done" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "rsp_error" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "rsp_nack" does not exist in macrofunction "u_i2c_reg_master"
+Error (12002): Port "rsp_rd_data" does not exist in macrofunction "u_i2c_reg_master"
+Warning (12241): 1 hierarchies have connectivity warnings - see the Connectivity Checks report folder
+Error: Quartus Prime Analysis & Synthesis was unsuccessful. 14 errors, 6 warnings
+	Error: Peak virtual memory: 343 megabytes
+	Error: Processing ended: Sat Apr 18 17:45:15 2026
+	Error: Elapsed time: 00:00:04
+	Error: Total CPU time (on all processors): 00:00:11
+Error (293001): Quartus Prime Full Compilation was unsuccessful. 16 errors, 6 warnings
